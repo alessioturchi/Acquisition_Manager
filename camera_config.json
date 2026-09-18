@@ -1,0 +1,17 @@
+{
+    "camera_index": 0,
+    "params": {
+        "gain": 6.5,
+        "exposure": 2081.0
+    },
+    "overlay": {
+        "crosshair": true,
+        "grid": false,
+        "circle": true,
+        "info": true,
+        "crosshair_size": 110,
+        "circle_radius": 130,
+        "offset_x": 85,
+        "offset_y": 434
+    }
+}

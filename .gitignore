@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime output
+pipeline.log
+acquisition_config.json
+live_frames/
+*.fits
+*.fit
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# PyInstaller
+build/
+dist/
+*.spec

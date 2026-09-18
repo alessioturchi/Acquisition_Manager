@@ -1,0 +1,16 @@
+# Core dependencies
+numpy>=1.20
+astropy>=5.0
+matplotlib>=3.4
+
+# Live preview window (lib/camera_view_lib.py)
+opencv-python>=4.5
+Pillow>=9.0
+
+# Camera access: NOT available on PyPI.
+# Install the XIMEA xiAPI software package from the vendor, then make sure its
+# Python bindings ("ximea") are reachable on PYTHONPATH.
+#   https://www.ximea.com/support/wiki/apis/Python
+#
+# tkinter ships with CPython on Windows and macOS.
+# On Debian/Ubuntu:  sudo apt install python3-tk
