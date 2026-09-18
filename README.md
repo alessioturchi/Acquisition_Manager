@@ -43,6 +43,23 @@ grabber thread, calls `stop_acquisition()` / `close_device()`, waits a short
 settle time, and only then opens the device for acquisition. If
 *Reopen after run* is ticked, the preview comes back when the run ends.
 
+### Motor
+
+The fibre agitation stage is optional and controlled by the **Motor switch** in
+the *Loop control* panel. With the switch off, no servo command and no move are
+issued; the wait between cycles still applies, so a run without agitation keeps
+the same timing as one with it — useful when measuring the static modal pattern.
+
+All motor parameters live in `motor.yml` next to the entry point: controller
+address and port, GCS axis, timeouts, tolerances and the bound of the random
+walk. Edit it and restart the GUI. If the file is missing or unreadable the
+Motor switch is forced off and disabled, with the reason in its tooltip: the
+program never falls back to a guessed address.
+
+> `motor.yml` contains the address of an instrument on your network. If the
+> repository is public, uncomment `motor.yml` in `.gitignore`, run
+> `git rm --cached motor.yml`, and let `motor.example.yml` be the tracked copy.
+
 ---
 
 ## Repository layout
@@ -62,6 +79,8 @@ Acquisition_Manager/
 ├── docs/
 │   ├── CONFIGURATION.md           every parameter, unit and default
 │   └── OUTPUTS.md                 every file the program writes
+├── motor.yml                      motor controller parameters (address, limits)
+├── motor.example.yml              tracked template of the above
 ├── camera_config.json             preview overlay / pointing state
 ├── requirements.txt
 └── LICENSE                        GPL-3.0
@@ -80,6 +99,7 @@ Python 3.8 or later.
 | `numpy` | everything | yes |
 | `astropy` | FITS I/O | yes |
 | `matplotlib` | diagnostic plots (`Agg` backend) | yes |
+| `PyYAML` | reads `motor.yml` | motor only |
 | `ximea` (xiAPI Python bindings) | camera access | yes, for real acquisition |
 | `opencv-python` | preview overlay rendering | preview only |
 | `Pillow` | preview frame display in Tkinter | preview only |
@@ -121,7 +141,8 @@ python -m lib.camera_view_lib --serial 28720523 --outdir /path/to/output
    *Auto position* is switched off so the manual column is actually used.
 4. Check the magenta crop-window lines in the preview: that is exactly what will
    be written to the FITS files.
-5. Set the number of iterations and the wait time, then press **GO LOOP**.
+5. Set the number of iterations and the wait time, decide whether the fibre
+   agitation motor should run (**Motor switch**), then press **GO LOOP**.
    The preview closes automatically.
 
 ---
@@ -160,8 +181,9 @@ clamping, both branches of `auto_position`, and the FITS header content.
   synthetic Gaussian) because the centroid algorithm subtracts the 10th
   percentile as background, which clips the wings. It is adequate for pointing,
   not for photometric work.
-- The motor host, port and travel limits are hard-coded in `_MOTOR_CONFIG` at
-  the top of `acquisition_manager_gui.py`.
+- `motor.yml` is read once at start-up: editing it requires restarting the GUI.
+- `home_tol` in `motor.yml` is declared but not read by any code path; it is
+  kept for a future homing routine.
 
 ---
 

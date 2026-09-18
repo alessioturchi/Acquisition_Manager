@@ -1,0 +1,45 @@
+# ==============================================================================
+# Motor configuration - Acquisition Manager
+#
+# Parameters of the PI C-863 Mercury controller driving the rotary stage that
+# agitates the fibre between acquisition cycles.  Read once at start-up by
+# acquisition_manager_gui.py:load_motor_config().
+#
+# If this file is missing or unreadable the Motor switch in the GUI is forced
+# off and disabled: the program never falls back to a guessed address.
+# Restart the GUI after editing.
+# ==============================================================================
+
+motor:
+  # Address of the motor server (the Raspberry Pi running the GCS/TCP bridge)
+  host: "193.206.154.132"
+  port: 2002
+
+  # GCS axis identifier.  Keep the quotes: an unquoted 1 is parsed as an int by
+  # YAML while the protocol expects a string.  It is coerced with str() anyway,
+  # but quoting makes the intent explicit.
+  axis: "1"
+
+  # Socket timeout, seconds
+  timeout: 10.0
+
+  # Positioning tolerance, stage units.  A move whose final position differs
+  # from the commanded one by more than this raises a warning in the log.
+  move_tol: 0.1
+
+  # Tolerance to accept the stage as "at home".  Currently declared but not
+  # read by any code path; kept for a future homing routine.
+  home_tol: 0.1
+
+  # On-target polling: how many ONT? queries and how long between them
+  ont_retries: 100
+  ont_delay: 0.5
+
+  # Settle time after a move before the position is read back, seconds
+  move_delay: 2.5
+
+random_walk:
+  # Bound of the random walk around the position recorded at the first move.
+  # Every step is chosen so the accumulated displacement stays within
+  # +/- this value, in stage units.
+  max_deviation: 20.0

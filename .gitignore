@@ -5,6 +5,11 @@ __pycache__/
 .venv/
 venv/
 
+# Instrument configuration
+# motor.yml holds the address of the motor server.  Uncomment the next line to
+# keep it out of a public repository and ship motor.example.yml instead:
+#motor.yml
+
 # Runtime output
 pipeline.log
 acquisition_config.json

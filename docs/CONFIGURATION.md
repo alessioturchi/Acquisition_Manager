@@ -79,8 +79,9 @@ compared after the fact.
 | Wait between cycles | `wait_sec` | s | `5.0` | Slept in 200 ms steps so STOP responds promptly. |
 | Enable extraction | `do_extract` | bool | `true` | |
 | Enable analysis | `do_analyze` | bool | `true` | |
+| Motor switch | `motor_enable` | bool | `true` | Off: no servo command and no move; the wait still applies. Forced off and disabled if `motor.yml` could not be read, both at start-up and when importing a config. |
 
-The motor move and the wait are skipped after the last iteration.
+The motor move is skipped after the last iteration, and so is the wait.
 
 ---
 
@@ -103,24 +104,63 @@ written by the preview's **Save config** button:
 
 ---
 
-## Motor
+## Motor — `motor.yml`
 
-Not exposed in the GUI: edit `_MOTOR_CONFIG` at the top of
-`acquisition_manager_gui.py`.
+Read once at start-up by `load_motor_config()` in `acquisition_manager_gui.py`.
+Edit the file and restart the GUI; there is no reload button.
 
-| Key | Default | Meaning |
-|---|---|---|
-| `host`, `port` | `193.206.154.132`, `2002` | Motor server on the Raspberry Pi |
-| `axis` | `"1"` | GCS axis identifier |
-| `timeout` | `10.0` s | Socket timeout |
-| `home_tol`, `move_tol` | `0.1` | Positioning tolerances |
-| `ont_retries`, `ont_delay` | `100`, `0.5` s | On-target polling |
-| `move_delay` | `2.5` s | Settle time after a move |
+```yaml
+motor:
+  host: "193.206.154.132"
+  port: 2002
+  axis: "1"
+  timeout: 10.0
+  move_tol: 0.1
+  home_tol: 0.1
+  ont_retries: 100
+  ont_delay: 0.5
+  move_delay: 2.5
 
-`_MOTOR_MAX_DEV` (default `20.0`) bounds the random walk: every move is chosen
-so the accumulated displacement from the starting position stays within
-±`_MOTOR_MAX_DEV`. The servo is enabled once at the start of a loop and disabled
-in the `finally` block, not per move.
+random_walk:
+  max_deviation: 20.0
+```
+
+| Key | Default | Unit | Meaning |
+|---|---|---|---|
+| `motor.host` | `127.0.0.1` | — | Address of the motor server (Raspberry Pi running the GCS/TCP bridge) |
+| `motor.port` | `2002` | — | TCP port of the server |
+| `motor.axis` | `"1"` | — | GCS axis identifier |
+| `motor.timeout` | `10.0` | s | Socket timeout |
+| `motor.move_tol` | `0.1` | stage units | A move landing further than this from the commanded position raises a log warning |
+| `motor.home_tol` | `0.1` | stage units | Declared but **not read** by any code path; kept for a future homing routine |
+| `motor.ont_retries` | `100` | — | Number of `ONT?` polls waiting for on-target |
+| `motor.ont_delay` | `0.5` | s | Delay between polls |
+| `motor.move_delay` | `2.5` | s | Settle time after a move before reading the position back |
+| `random_walk.max_deviation` | `20.0` | stage units | Bound of the random walk: every step keeps the accumulated displacement within ± this value |
+
+Keys omitted from the `motor:` section fall back to the built-in defaults and
+the substitution is printed at start-up. The two failure modes are different:
+
+| Situation | Behaviour |
+|---|---|
+| Some keys missing | File accepted, defaults filled in, list of substitutions printed |
+| File missing, PyYAML not installed, or YAML malformed | **Motor switch forced off and disabled**, reason shown in its tooltip. The program never drives a stage at a guessed address. |
+
+### YAML gotcha
+
+Quote the axis. An unquoted `axis: 1` is parsed as an integer while the GCS
+protocol expects a string. The loader coerces it with `str()` anyway, so both
+forms work, but quoting makes the intent explicit.
+
+The servo is enabled once at the start of a loop and disabled in the `finally`
+block, not per move — and neither happens at all when the Motor switch is off.
+
+### Address in a public repository
+
+`motor.yml` carries the address of an instrument on your network. To keep it out
+of a public repository, uncomment `motor.yml` in `.gitignore`, run
+`git rm --cached motor.yml`, and let the tracked `motor.example.yml` serve as
+the template new users copy.
 
 ---
 

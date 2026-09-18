@@ -67,13 +67,19 @@ except Exception as _exc:          # ImportError, but also any module-level erro
 DEFAULT_GAIN_DB = 0.0
 
 # ==============================================================================
-# STUB: motor command  (replace with real implementation)
+# MOTOR CONFIGURATION
+#
+# All motor parameters, the controller address included, live in motor.yml next
+# to this file.  If the file (or PyYAML) is missing the motor is disabled in the
+# GUI rather than silently driven with fallback values: moving a stage at a
+# guessed address is worse than not moving it at all.
 # ==============================================================================
-_motor_accum   = 0.0   # accumulated displacement from zero (signed)
-_MOTOR_MAX_DEV = 20.0  # maximum allowed deviation from zero
+MOTOR_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "motor.yml")
 
-_MOTOR_CONFIG = {
-    "host":        "193.206.154.132",
+# Used only to fill keys a valid motor.yml happens to omit
+_MOTOR_DEFAULTS = {
+    "host":        "127.0.0.1",
     "port":        2002,
     "axis":        "1",
     "timeout":     10.0,
@@ -83,6 +89,64 @@ _MOTOR_CONFIG = {
     "ont_delay":   0.5,
     "move_delay":  2.5,
 }
+_MOTOR_MAX_DEV_DEFAULT = 20.0     # maximum allowed deviation from zero
+
+
+def load_motor_config(path: str = MOTOR_CONFIG_PATH):
+    """
+    Read the motor configuration from a YAML file.
+
+    Returns
+    -------
+    (config, max_deviation, ok, message)
+        config        : dict accepted by motor_client_lib
+        max_deviation : bound of the random walk around the starting position
+        ok            : False if the file could not be used at all
+        message       : human-readable detail, empty when everything was found
+    """
+    fallback = (dict(_MOTOR_DEFAULTS), _MOTOR_MAX_DEV_DEFAULT)
+
+    try:
+        import yaml
+    except ImportError as exc:
+        return (*fallback, False, f"PyYAML is not installed ({exc})")
+
+    if not os.path.isfile(path):
+        return (*fallback, False, f"{os.path.basename(path)} not found")
+
+    try:
+        with open(path) as f:
+            doc = yaml.safe_load(f) or {}
+    except Exception as exc:
+        return (*fallback, False, f"cannot parse {os.path.basename(path)}: {exc}")
+
+    motor_section = doc.get("motor") or {}
+    cfg = dict(_MOTOR_DEFAULTS)
+    cfg.update(motor_section)
+    # YAML turns an unquoted 1 into an int, but the GCS protocol wants the axis
+    # identifier as a string; coerce it centrally instead of at each call site.
+    cfg["axis"] = str(cfg["axis"])
+
+    max_dev = float((doc.get("random_walk") or {}).get(
+        "max_deviation", _MOTOR_MAX_DEV_DEFAULT))
+
+    missing = [k for k in _MOTOR_DEFAULTS if k not in motor_section]
+    msg = ("default used for: " + ", ".join(sorted(missing))) if missing else ""
+    return cfg, max_dev, True, msg
+
+
+_MOTOR_CONFIG, _MOTOR_MAX_DEV, MOTOR_CONFIG_OK, MOTOR_CONFIG_MSG = \
+    load_motor_config()
+if not MOTOR_CONFIG_OK:
+    print(f"[motor] Configuration unusable ({MOTOR_CONFIG_MSG}); "
+          "the motor switch is disabled")
+elif MOTOR_CONFIG_MSG:
+    print(f"[motor] {MOTOR_CONFIG_PATH}: {MOTOR_CONFIG_MSG}")
+
+# ==============================================================================
+# Motor command
+# ==============================================================================
+_motor_accum   = 0.0   # accumulated displacement from zero (signed)
 
 def exec_motor(params: dict) -> bool:
     """
@@ -239,6 +303,7 @@ class MainApp(ttk.Frame):
         # Loop control
         self.n_loops   = tk.IntVar()    # number of loop iterations
         self.wait_sec  = tk.DoubleVar() # wait time between iterations (s)
+        self.motor_enable = tk.BooleanVar(value=MOTOR_CONFIG_OK)
         # Optional phases
         self.do_extract = tk.BooleanVar(value=True)
         self.do_analyze = tk.BooleanVar(value=True)
@@ -258,6 +323,7 @@ class MainApp(ttk.Frame):
         self._btn_single  = None
         self._btn_extract = None
         self._btn_analyze = None
+        self._cb_motor    = None
 
     def _set_defaults(self):
         """Set default values for all fields (also used by Reset button)."""
@@ -294,6 +360,8 @@ class MainApp(ttk.Frame):
 
         self.n_loops.set(1)
         self.wait_sec.set(5.0)
+        # Never turn the motor on if its configuration could not be loaded
+        self.motor_enable.set(MOTOR_CONFIG_OK)
 
         # Reset optional phases
         self.do_extract.set(True)
@@ -575,6 +643,22 @@ class MainApp(ttk.Frame):
         e.grid(row=1, column=4, sticky=tk.W)
         Tooltip(e, text='Seconds to wait after exec_motor() before starting the next cycle')
 
+        # Motor switch: when off, no servo enable/disable and no move is issued
+        ttk.Label(lp, text="Motor switch:").grid(row=1, column=5, sticky=tk.E)
+        self._cb_motor = ttk.Checkbutton(lp, variable=self.motor_enable)
+        self._cb_motor.grid(row=1, column=6, sticky=tk.W)
+        if MOTOR_CONFIG_OK:
+            Tooltip(self._cb_motor,
+                    text='ON: the fibre agitation stage is moved between cycles '
+                         f'({_MOTOR_CONFIG["host"]}:{_MOTOR_CONFIG["port"]}, '
+                         f'axis {_MOTOR_CONFIG["axis"]}).  OFF: no servo command '
+                         'and no move is sent; the wait still applies.')
+        else:
+            self._cb_motor.configure(state='disabled')
+            Tooltip(self._cb_motor,
+                    text=f'Motor disabled: {MOTOR_CONFIG_MSG}. '
+                         f'Check {os.path.basename(MOTOR_CONFIG_PATH)}.')
+
         # GO LOOP — reference saved to disable/enable during run
         self._btn_go = ttk.Button(lp, text="GO LOOP", style='Loop.TButton',
                                   command=self._run_loop)
@@ -671,6 +755,7 @@ class MainApp(ttk.Frame):
                 "wait_sec":    self.wait_sec.get(),
                 "do_extract":  self.do_extract.get(),
                 "do_analyze":  self.do_analyze.get(),
+                "motor_enable": self.motor_enable.get(),
             },
             "preview": {
                 "reopen_after_run": self.preview_reopen.get(),
@@ -747,6 +832,9 @@ class MainApp(ttk.Frame):
         self.wait_sec.set(lp.get("wait_sec",   self.wait_sec.get()))
         self.do_extract.set(lp.get("do_extract", self.do_extract.get()))
         self.do_analyze.set(lp.get("do_analyze", self.do_analyze.get()))
+        self.motor_enable.set(bool(lp.get("motor_enable",
+                                          self.motor_enable.get()))
+                              and MOTOR_CONFIG_OK)
 
         pv = cfg.get("preview", {})
         self.preview_reopen.set(pv.get("reopen_after_run",
@@ -1064,6 +1152,9 @@ class MainApp(ttk.Frame):
         wait_sec   = self.wait_sec.get()
         do_extract = self.do_extract.get()
         do_analyze = self.do_analyze.get()
+        # A motor.yml that failed to load forces the motor off, whatever the
+        # checkbox says (it may have been restored by an imported config)
+        use_motor  = bool(self.motor_enable.get()) and MOTOR_CONFIG_OK
         acq_cfg    = self._acq_cfg()
         ext_cfg    = self._ext_cfg()
         ana_cfg    = self._ana_cfg()
@@ -1080,13 +1171,13 @@ class MainApp(ttk.Frame):
         self._loop_thread = threading.Thread(
             target=self._loop_worker,
             args=(n_loops, wait_sec, do_extract, do_analyze,
-                  acq_cfg, ext_cfg, ana_cfg),
+                  acq_cfg, ext_cfg, ana_cfg, use_motor),
             daemon=True,
         )
         self._loop_thread.start()
 
     def _loop_worker(self, n_loops, wait_sec, do_extract, do_analyze,
-                     acq_cfg, ext_cfg, ana_cfg):
+                     acq_cfg, ext_cfg, ana_cfg, use_motor=True):
         """
         Background thread: acquire → [extract] → [analyze] → motor → wait.
 
@@ -1096,8 +1187,16 @@ class MainApp(ttk.Frame):
             iteration is deleted via _cleanup_iteration(), the motor servo is
             disabled, and the loop exits.
           - Iterations that completed successfully are never touched.
+
+        Motor switch:
+          - use_motor False skips the servo enable/disable and every move; the
+            wait between cycles still applies, so a run without fibre agitation
+            keeps the same timing as one with it.
         """
-        motor_servo_enable(_MOTOR_CONFIG)
+        if use_motor:
+            motor_servo_enable(_MOTOR_CONFIG)
+        else:
+            print("[motor] Motor switch is OFF: no servo command, no move")
         stopped = False
         # Tracks the timestamped subdir of the iteration in progress;
         # reset to None once the iteration completes cleanly.
@@ -1155,9 +1254,14 @@ class MainApp(ttk.Frame):
                     if self._stop_flag.is_set():
                         stopped = True
                         break
-                    self._set_status(
-                        f"Cycle {i+1}/{n_loops} - motor + waiting {wait_sec}s")
-                    exec_motor({"move": True, "pause": 2.0})
+                    if use_motor:
+                        self._set_status(
+                            f"Cycle {i+1}/{n_loops} - motor + waiting {wait_sec}s")
+                        exec_motor({"move": True, "pause": 2.0})
+                    else:
+                        self._set_status(
+                            f"Cycle {i+1}/{n_loops} - waiting {wait_sec}s "
+                            "(motor off)")
                     # Sleep in 200 ms steps so stop is detected promptly
                     elapsed = 0.0
                     while elapsed < wait_sec and not self._stop_flag.is_set():
@@ -1165,7 +1269,8 @@ class MainApp(ttk.Frame):
                         elapsed += 0.2
 
         finally:
-            motor_servo_disable(_MOTOR_CONFIG)
+            if use_motor:
+                motor_servo_disable(_MOTOR_CONFIG)
             if stopped:
                 self._set_status("Stopped by user")
             else:

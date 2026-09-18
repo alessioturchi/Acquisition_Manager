@@ -2,6 +2,7 @@
 numpy>=1.20
 astropy>=5.0
 matplotlib>=3.4
+PyYAML>=5.4          # motor.yml configuration
 
 # Live preview window (lib/camera_view_lib.py)
 opencv-python>=4.5
