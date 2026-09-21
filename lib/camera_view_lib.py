@@ -148,6 +148,41 @@ MAGENTA_BGR = (255, 0, 255)
 
 
 # ==============================================================================
+# SMALL HELPERS (notes / FRD distance)
+# ==============================================================================
+def _ascii_text(text) -> str:
+    """FITS headers are ASCII-only: strip accents, flatten newlines to ' | '."""
+    import unicodedata
+    text = str(text or "")
+    for src, dst in (("\u00b5", "u"), ("\u03bc", "u"), ("\u00b0", "deg"),
+                     ("\u00b1", "+/-")):
+        text = text.replace(src, dst)   # symbols that NFKD would silently drop
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii")
+    return " | ".join(ln.strip() for ln in text.splitlines() if ln.strip())
+
+
+def is_partial_float(text: str) -> bool:
+    """Tk key validation: accept text that can still become a float ('', '-', '1e')."""
+    try:
+        float(text + "0")
+        return True
+    except ValueError:
+        return False
+
+
+def parse_frd(text: str):
+    """Return the FRD distance as float, or None if empty.  Raises ValueError."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    value = float(text)
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ValueError("FRD distance must be finite")   # not writable in FITS
+    return value
+
+
+# ==============================================================================
 # CLASS: CameraView
 # ==============================================================================
 class CameraView:
@@ -180,11 +215,19 @@ class CameraView:
         Exposure to apply at open(), overriding the stored config.
     initial_gain : float or None
         Gain to apply at open(), overriding the stored config.
+    notes_var, frd_var : tk.StringVar or None
+        Host-owned variables for "Camera notes" and "FRD-analysis: distance",
+        so that their content survives the closing of the preview.  Created
+        locally when None (standalone use).
+    header_provider : callable or None
+        Called at capture time; must return a list of (keyword, value,
+        comment) appended to the FITS header after all the other keywords.
     """
 
     def __init__(self, master, serial="", config_file=None, outdir=".",
                  crop_provider=None, apply_callback=None, on_close=None,
-                 initial_exposure_ms=None, initial_gain=None):
+                 initial_exposure_ms=None, initial_gain=None,
+                 notes_var=None, frd_var=None, header_provider=None):
         self.master = master
         self.serial = str(serial or "")
         self.config_file = config_file or os.path.join(_get_base_dir(),
@@ -193,6 +236,9 @@ class CameraView:
         self.crop_provider = crop_provider
         self.apply_callback = apply_callback
         self.on_close = on_close
+        self.notes_var = notes_var
+        self.frd_var = frd_var
+        self.header_provider = header_provider
 
         self.win = None                 # Toplevel, created in open()
 
@@ -577,6 +623,23 @@ class CameraView:
         self.circle_radius_var = tk.IntVar(value=self.circle_radius)
         self._slider("Circle radius", self.circle_radius_var, 20, 500, 10,
                      command=lambda v: setattr(self, 'circle_radius', int(float(v))))
+
+        # --- NOTES (saved in the header of captured FITS frames) ---
+        self._section("NOTES")
+        if self.notes_var is None:
+            self.notes_var = tk.StringVar(master=self.win)
+        if self.frd_var is None:
+            self.frd_var = tk.StringVar(master=self.win)
+        tk.Label(self.ctrl, text="Camera notes", bg=BG2, fg=FG,
+                 font=('Helvetica', 9)).pack(anchor='w', padx=10)
+        tk.Entry(self.ctrl, textvariable=self.notes_var,
+                 font=('Helvetica', 9)).pack(fill=tk.X, padx=10, pady=(0, 4))
+        tk.Label(self.ctrl, text="FRD-analysis: distance", bg=BG2, fg=FG,
+                 font=('Helvetica', 9)).pack(anchor='w', padx=10)
+        vcmd = (self.win.register(is_partial_float), '%P')
+        tk.Entry(self.ctrl, textvariable=self.frd_var, validate='key',
+                 validatecommand=vcmd,
+                 font=('Courier', 9)).pack(fill=tk.X, padx=10, pady=(0, 4))
 
         # --- ACTIONS ---
         self._section("ACTIONS")
@@ -1035,6 +1098,13 @@ class CameraView:
             print("[CameraView] No frame to capture")
             return
 
+        try:
+            frd = parse_frd(self.frd_var.get() if self.frd_var else "")
+        except ValueError:
+            messagebox.showerror("Capture", "FRD-analysis: distance is not a "
+                                 "valid number", parent=self.win)
+            return
+
         save_dir = os.path.join(self.outdir, "live_frames")
         try:
             os.makedirs(save_dir, exist_ok=True)
@@ -1072,6 +1142,17 @@ class CameraView:
                 hdu.header['FWHM_Y']  = (round(fy, 3), 'FWHM Y (raw px)')
                 hdu.header['FWHM_AV'] = (round((fx + fy) / 2, 3),
                                          'FWHM mean (raw px)')
+            # Extension keywords, appended after the legacy ones
+            hdu.header['CAMNOTES'] = (_ascii_text(self.notes_var.get()),
+                                      'Camera notes')
+            if frd is not None:
+                hdu.header['FRD_DIST'] = (frd, 'FRD-analysis: distance')
+            if self.header_provider is not None:
+                try:
+                    for key, val, com in self.header_provider():
+                        hdu.header[key] = (val, com)
+                except Exception as exc:
+                    print(f"[CameraView] Extra header cards skipped: {exc}")
             hdu.writeto(fname, overwrite=True)
         else:
             fname = os.path.join(save_dir, f"live_{timestamp}.png")

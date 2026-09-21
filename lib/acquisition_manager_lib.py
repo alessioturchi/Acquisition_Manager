@@ -34,6 +34,8 @@ Library refactoring: March 2026 - Alessio Turchi.
 import os
 import gc
 import sys
+import json
+import unicodedata
 import numpy as np
 from astropy.io import fits
 from datetime import datetime
@@ -131,6 +133,65 @@ def default_output_dir() -> str:
 import logging
 
 log = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------------------
+# FITS header extension (metadata appended AFTER the legacy keywords)
+# ------------------------------------------------------------------------------
+FITS_META_VERSION = 1
+
+
+def fits_text(text) -> str:
+    """FITS headers are ASCII-only: strip accents, flatten newlines to ' | '."""
+    text = str(text or "")
+    for src, dst in (("\u00b5", "u"), ("\u03bc", "u"), ("\u00b0", "deg"),
+                     ("\u00b1", "+/-")):
+        text = text.replace(src, dst)   # symbols that NFKD would silently drop
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return " | ".join(lines)
+
+
+def parse_frd(text):
+    """Return the FRD distance as float, or None if empty.  Raises ValueError."""
+    text = str(text or "").strip()
+    if not text:
+        return None
+    value = float(text)
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ValueError("FRD distance must be finite")   # not writable in FITS
+    return value
+
+
+def fits_meta_cards(meta) -> list:
+    """
+    Build the extension header cards as a list of (keyword, value, comment).
+
+    Only the entries present in `meta` are written:
+      config    : dict -> AMCONFIG, full GUI configuration as JSON (long string,
+                  FITS CONTINUE convention); read back with
+                  json.loads(header['AMCONFIG'])
+      acq_notes : str  -> ACQNOTES
+      cam_notes : str  -> CAMNOTES
+      frd_dist  : float or None -> FRD_DIST (omitted when None)
+    AMCFGVER (metadata version) is always written when meta is non-empty.
+    """
+    if not meta:
+        return []
+    cards = [("AMCFGVER", FITS_META_VERSION, "Acquisition Manager metadata version")]
+    if "config" in meta:
+        cards.append(("AMCONFIG",
+                      json.dumps(meta["config"], ensure_ascii=True,
+                                 separators=(",", ":")),
+                      "GUI configuration (JSON)"))
+    if "acq_notes" in meta:
+        cards.append(("ACQNOTES", fits_text(meta["acq_notes"]), "Acquisition notes"))
+    if "cam_notes" in meta:
+        cards.append(("CAMNOTES", fits_text(meta["cam_notes"]), "Camera notes"))
+    if meta.get("frd_dist") is not None:
+        cards.append(("FRD_DIST", float(meta["frd_dist"]), "FRD-analysis: distance"))
+    return cards
 
 def setup_file_logging(outdir: str) -> None:
     """Configure root logger to write INFO+ to outdir/pipeline.log."""
@@ -362,6 +423,9 @@ def run_acquisition(cfg: dict) -> str:
                 hea['SUBSET']   = (subset,'Raw frames averaged per FITS entry')
                 hea['TEXP_SUB'] = (texp * subset,
                                    'Effective exposure of each FITS entry (s)')
+                # Extension keywords, appended after the legacy ones
+                for key, val, com in fits_meta_cards(cfg.get("fits_meta")):
+                    hea[key] = (val, com)
 
             cropped = data[:, xmin:xmax]
             datacube_subset.append(cropped)

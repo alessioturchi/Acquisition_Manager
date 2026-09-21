@@ -224,5 +224,47 @@ for tag, got, exp in checks:
     results.append(ok)
     print(f"[{'PASS' if ok else 'FAIL'}] {tag}: got {got!r}, expected {exp!r}")
 
+# --- FITS header extension: must only ADD keywords, never alter legacy ones ---
+import json   # noqa: E402
+META = {"config": {"acquisition": {"outdir": "C:/tmp/perch\u00e9"}, "analysis": {"poly": 3}},
+        "acq_notes": "Fibra 50\u00b5m\nsecondo test", "cam_notes": "fuoco ok",
+        "frd_dist": 12.5}
+_headers.clear()
+run("with fits_meta", {"texp_ms": 10.0, "auto_position": 0, "fits_meta": META},
+    {"n_files": 2})
+h_ext = _headers[0]
+new_keys = ["AMCFGVER", "AMCONFIG", "ACQNOTES", "CAMNOTES", "FRD_DIST"]
+checks = [
+    ("EXT: legacy keywords unchanged",
+     {k: h_ext[k] for k in h_man}, h_man),
+    ("EXT: legacy keywords come first",
+     list(h_ext)[:len(h_man)], list(h_man)),
+    ("EXT: new keywords appended in order", list(h_ext)[len(h_man):], new_keys),
+    ("EXT: no new keywords without fits_meta",
+     [k for k in new_keys if k in h_man], []),
+    ("EXT: AMCONFIG is JSON round-trip", json.loads(h_ext["AMCONFIG"]), META["config"]),
+    ("EXT: AMCONFIG is ASCII", h_ext["AMCONFIG"].isascii(), True),
+    ("EXT: ACQNOTES ASCII, newline flattened", h_ext["ACQNOTES"],
+     "Fibra 50um | secondo test"),
+    ("EXT: FRD_DIST float", h_ext["FRD_DIST"], 12.5),
+    ("EXT: FRD_DIST omitted when None",
+     "FRD_DIST" in dict((k, v) for k, v, _ in alib.fits_meta_cards({"frd_dist": None})),
+     False),
+]
+for tag, got, exp in checks:
+    ok = got == exp
+    results.append(ok)
+    print(f"[{'PASS' if ok else 'FAIL'}] {tag}: got {got!r}, expected {exp!r}")
+
+bad = []
+for txt in ("", " 3.5 ", "1e3", "abc", "nan", "inf"):
+    try:
+        bad.append(alib.parse_frd(txt))
+    except ValueError:
+        bad.append("ERR")
+ok = bad == [None, 3.5, 1000.0, "ERR", "ERR", "ERR"]
+results.append(ok)
+print(f"[{'PASS' if ok else 'FAIL'}] parse_frd: {bad}")
+
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

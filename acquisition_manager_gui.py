@@ -311,6 +311,11 @@ class MainApp(ttk.Frame):
         self.do_analyze = tk.BooleanVar(value=True)
         # Camera preview
         self.preview_reopen = tk.BooleanVar(value=True)
+        # Notes (FITS header extension).  Camera notes and FRD distance are
+        # edited in the preview window but owned here, so they survive its closing.
+        self.cam_notes = tk.StringVar()
+        self.frd_dist  = tk.StringVar()
+        self._txt_acq_notes = None      # tk.Text, created in _build_gui
         # Stop mechanism state (not tkinter vars)
         self._stop_flag   = threading.Event()
         self._loop_thread = None
@@ -682,8 +687,18 @@ class MainApp(ttk.Frame):
             child.grid_configure(padx=5, pady=5)
 
         # ---- Bottom frame ----
+        # ---- Acquisition notes (saved as ACQNOTES in the FITS headers) ----
+        nt = ttk.LabelFrame(self.master, text='Acquisition notes',
+                            padding="3 3 12 12")
+        nt.grid(row=13, columnspan=13, sticky=(tk.N, tk.W, tk.E))
+        nt.columnconfigure(0, weight=1)
+        self._txt_acq_notes = tk.Text(nt, height=3, wrap='word')
+        self._txt_acq_notes.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
+        Tooltip(self._txt_acq_notes,
+                text='Free text, written in the header of every acquired FITS file')
+
         bot = ttk.Frame(self.master, padding="3 3 12 12")
-        bot.grid(row=13, column=1, columnspan=6, sticky=(tk.N, tk.W, tk.E))
+        bot.grid(row=14, column=1, columnspan=6, sticky=(tk.N, tk.W, tk.E))
         for col in range(6):
             bot.columnconfigure(col, weight=1)
         ttk.Button(bot, text="Reset all fields",
@@ -764,12 +779,45 @@ class MainApp(ttk.Frame):
             },
         }
 
+    def _notes_cfg(self):
+        """Notes and FRD distance (kept out of _all_cfg: they have own keywords)."""
+        try:
+            frd = alib.parse_frd(self.frd_dist.get())
+        except ValueError:
+            frd = None
+        return {
+            "acq_notes": self._txt_acq_notes.get("1.0", "end-1c"),
+            "cam_notes": self.cam_notes.get(),
+            "frd_dist":  frd,
+        }
+
+    def _fits_meta(self):
+        """
+        Metadata appended to the acquisition FITS headers.  Returns None, after
+        warning the user, if the FRD distance is not a valid number.
+        """
+        try:
+            alib.parse_frd(self.frd_dist.get())
+        except ValueError:
+            messagebox.showerror("FRD-analysis: distance",
+                                 f"'{self.frd_dist.get()}' is not a valid number.")
+            return None
+        return dict(self._notes_cfg(), config=self._all_cfg())
+
+    def _preview_header_cards(self):
+        """Extra cards for preview captures (CameraView writes CAMNOTES/FRD_DIST)."""
+        return alib.fits_meta_cards({
+            "config":    self._all_cfg(),
+            "acq_notes": self._txt_acq_notes.get("1.0", "end-1c"),
+        })
+
     def _save_config(self, outdir: str):
         """Save all GUI parameters as JSON inside outdir."""
         cfg_path = os.path.join(outdir, "acquisition_config.json")
         try:
             with open(cfg_path, "w") as f:
-                json.dump(self._all_cfg(), f, indent=4)
+                json.dump(dict(self._all_cfg(), notes=self._notes_cfg()),
+                          f, indent=4)
         except OSError as exc:
             print(f"[WARNING] Could not save config: {exc}")
 
@@ -841,6 +889,15 @@ class MainApp(ttk.Frame):
         pv = cfg.get("preview", {})
         self.preview_reopen.set(pv.get("reopen_after_run",
                                        self.preview_reopen.get()))
+
+        # Notes section is optional: configs written before it simply lack it
+        nts = cfg.get("notes")
+        if nts:
+            self._txt_acq_notes.delete("1.0", "end")
+            self._txt_acq_notes.insert("1.0", nts.get("acq_notes", ""))
+            self.cam_notes.set(nts.get("cam_notes", ""))
+            frd = nts.get("frd_dist")
+            self.frd_dist.set("" if frd is None else repr(float(frd)))
         # Restore analysis checkbox state to match loaded value
         self._on_extract_toggle()
 
@@ -902,6 +959,9 @@ class MainApp(ttk.Frame):
             on_close=self._on_preview_closed,
             initial_exposure_ms=self.texp_ms.get(),
             initial_gain=self.gain.get(),
+            notes_var=self.cam_notes,
+            frd_var=self.frd_dist,
+            header_provider=self._preview_header_cards,
         )
         if not self._camera_view.open():
             # open() has already reported the reason to the user
@@ -1020,12 +1080,17 @@ class MainApp(ttk.Frame):
         """GO! button: run a single acquisition in a background thread."""
         if self._worker_busy():
             return
+        meta = self._fits_meta()         # validate before touching the camera
+        if meta is None:
+            return
         # The preview owns the camera: release it before opening the device.
         self._release_camera()
         outdir = self._ensure_outdir()
         self._save_config(outdir)
         alib.setup_file_logging(outdir)
         acq_cfg = self._acq_cfg()        # snapshot in the GUI thread
+        meta["config"]["acquisition"]["outdir"] = outdir   # after a possible fallback
+        acq_cfg["fits_meta"] = meta
         self._set_buttons_running(True)
         self._loop_thread = threading.Thread(
             target=self._single_worker, args=(acq_cfg,), daemon=True)
@@ -1159,6 +1224,9 @@ class MainApp(ttk.Frame):
         """
         if self._worker_busy():
             return
+        meta = self._fits_meta()         # validate before touching the camera
+        if meta is None:
+            return
 
         # The preview owns the camera: release it before the loop starts.
         # This must happen in the GUI thread, before the worker is launched.
@@ -1173,11 +1241,19 @@ class MainApp(ttk.Frame):
         # checkbox says (it may have been restored by an imported config)
         use_motor  = bool(self.motor_enable.get()) and MOTOR_CONFIG_OK
         acq_cfg    = self._acq_cfg()
+        acq_cfg["fits_meta"] = meta
         ext_cfg    = self._ext_cfg()
         ana_cfg    = self._ana_cfg()
         ana_cfg["chunk"] = acq_cfg["sequence"] // 2  # keep chunk in sync with sequence
+        # Keep the header copy of the configuration consistent with what runs
+        meta["config"]["analysis"]["chunk"] = ana_cfg["chunk"]
+        if use_motor:
+            meta["config"]["motor"] = dict(_MOTOR_CONFIG, max_deviation=_MOTOR_MAX_DEV)
 
         outdir = self._ensure_outdir()
+        # _ensure_outdir() may have fallen back to the default directory
+        acq_cfg["outdir"] = outdir
+        meta["config"]["acquisition"]["outdir"] = outdir
         self._save_config(outdir)
         alib.setup_file_logging(outdir)
 
