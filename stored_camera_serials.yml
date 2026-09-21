@@ -1,0 +1,14 @@
+# ==============================================================================
+# Known XIMEA camera serial numbers - Acquisition Manager
+#
+# Listed in the drop-down menu of the "XIMEA Serial number" field.  The field
+# stays editable: any other serial can still be typed by hand.
+# The file is re-read every time the menu is opened: no restart needed.
+#
+# Keep the quotes: YAML would read an unquoted 28720523 as an integer, and a
+# serial with leading zeros (e.g. 0123) as an octal number.
+# ==============================================================================
+
+serials:
+  - "28720523"
+  - "CUMAU2215012"

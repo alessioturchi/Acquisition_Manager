@@ -81,6 +81,7 @@ Acquisition_Manager/
 │   └── OUTPUTS.md                 every file the program writes
 ├── motor.yml                      motor controller parameters (address, limits)
 ├── motor.example.yml              tracked template of the above
+├── stored_camera_serials.yml      known camera serials (serial drop-down menu)
 ├── camera_config.json             preview overlay / pointing state
 ├── requirements.txt
 └── LICENSE                        GPL-3.0

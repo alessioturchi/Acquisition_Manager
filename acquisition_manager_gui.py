@@ -137,6 +137,29 @@ def load_motor_config(path: str = MOTOR_CONFIG_PATH):
 
 _MOTOR_CONFIG, _MOTOR_MAX_DEV, MOTOR_CONFIG_OK, MOTOR_CONFIG_MSG = \
     load_motor_config()
+
+# ==============================================================================
+# KNOWN CAMERA SERIALS (drop-down menu of the serial field)
+# ==============================================================================
+SERIALS_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "stored_camera_serials.yml")
+
+
+def load_camera_serials(path: str = SERIALS_CONFIG_PATH) -> list:
+    """
+    Return the serials listed under 'serials:' in stored_camera_serials.yml,
+    as strings, without duplicates.  Any problem (missing file, no PyYAML,
+    bad syntax) yields an empty list: the field then works as a plain entry.
+    """
+    try:
+        import yaml
+        with open(path) as f:
+            doc = yaml.safe_load(f) or {}
+        serials = [str(s).strip() for s in (doc.get("serials") or [])]
+        return list(dict.fromkeys(s for s in serials if s))
+    except Exception as exc:
+        print(f"[serials] {os.path.basename(path)} not used: {exc}")
+        return []
 if not MOTOR_CONFIG_OK:
     print(f"[motor] Configuration unusable ({MOTOR_CONFIG_MSG}); "
           "the motor switch is disabled")
@@ -393,9 +416,15 @@ class MainApp(ttk.Frame):
         acq.grid(row=0, rowspan=4, columnspan=12, sticky=(tk.N, tk.W, tk.E))
 
         ttk.Label(acq, text="XIMEA Serial number: ").grid(row=1, column=1, sticky=tk.E)
-        e = ttk.Entry(acq, textvariable=self.serial, width=12)
+        # Editable combobox: known serials from stored_camera_serials.yml,
+        # re-read each time the menu opens; any other serial can be typed.
+        e = ttk.Combobox(acq, textvariable=self.serial, width=12,
+                         values=load_camera_serials())
+        e.configure(postcommand=lambda cb=e: cb.configure(
+            values=load_camera_serials()))
         e.grid(row=1, column=3, columnspan=7, sticky=(tk.W, tk.E))
-        Tooltip(e, text='Serial number of the XIMEA camera')
+        Tooltip(e, text='Serial number of the XIMEA camera '
+                        '(pick a known one or type a new one)')
 
         ttk.Label(acq, text="Bit: ").grid(row=1, column=10, sticky=tk.E)
         e = ttk.Entry(acq, textvariable=self.bin_bit, width=3)
