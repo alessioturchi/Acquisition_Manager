@@ -257,7 +257,9 @@ class MainApp(ttk.Frame):
         self.master = master
         ttk.Frame.__init__(self, self.master)
         self.master.title('Acquisition Manager - XIMEA')
-        self.basedir = r"Z:/Loop_Measures/Try1"
+        # Default root output directory: <user Desktop>/Measurements.
+        # Not created here: _ensure_outdir() creates it only when files are saved.
+        self.basedir = os.path.join(alib.default_output_dir(), "Measurements")
         self._define_vars()
         self._set_defaults()
         self._build_gui()
@@ -336,7 +338,7 @@ class MainApp(ttk.Frame):
         self.position.set(1750)
         self.auto_position.set(1)
         self.halfwidth.set(250)
-        self.outdir.set(r'Z:/Loop_Measures/Try1')
+        self.outdir.set(self.basedir)
 
         self.indir.set('')
         self.suffix.set("_datacube.fit")
@@ -843,9 +845,22 @@ class MainApp(ttk.Frame):
         self._on_extract_toggle()
 
     def _ensure_outdir(self) -> str:
-        """Create output directory if it does not exist. Returns the path."""
+        """
+        Create output directory if it does not exist. Returns the path.
+        If it cannot be created (e.g. unmapped network drive), fall back to
+        the default directory (<Desktop>/Measurements) and warn the user.
+        """
         outdir = self.outdir.get()
-        os.makedirs(outdir, exist_ok=True)
+        try:
+            os.makedirs(outdir, exist_ok=True)
+        except OSError as exc:
+            fallback = self.basedir
+            os.makedirs(fallback, exist_ok=True)
+            messagebox.showwarning(
+                "Output directory",
+                f"Cannot create '{outdir}':\n{exc}\n\nUsing '{fallback}' instead.")
+            self.outdir.set(fallback)
+            outdir = fallback
         return outdir
 
     # --------------------------------------------------------------------------
@@ -875,7 +890,9 @@ class MainApp(ttk.Frame):
         if self._preview_is_open():
             return
 
-        outdir = self._ensure_outdir()
+        # Do not create outdir just to open the preview: CameraView.capture()
+        # creates <outdir>/live_frames lazily when a frame is actually saved.
+        outdir = self.outdir.get()
         self._camera_view = cvlib.CameraView(
             self.master,
             serial=self.serial.get(),
@@ -1087,7 +1104,7 @@ class MainApp(ttk.Frame):
     # --------------------------------------------------------------------------
     def _browse_outdir(self):
         start = self.outdir.get() if os.path.isdir(self.outdir.get()) else (
-            self.basedir if os.path.isdir(self.basedir) else os.getcwd())
+            self.basedir if os.path.isdir(self.basedir) else alib.default_output_dir())
         d = filedialog.askdirectory(initialdir=start, title="Select output directory")
         if d:
             self.outdir.set(d)

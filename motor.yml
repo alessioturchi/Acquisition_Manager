@@ -12,7 +12,7 @@
 
 motor:
   # Address of the motor server (the Raspberry Pi running the GCS/TCP bridge)
-  host: "193.206.154.132"
+  host: "192.168.31.132"
   port: 2002
 
   # GCS axis identifier.  Keep the quotes: an unquoted 1 is parsed as an int by

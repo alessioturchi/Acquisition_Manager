@@ -93,6 +93,41 @@ def _get(cfg, key):
     """Return cfg[key] if present, else DEFAULT_CFG[key]."""
     return cfg.get(key, DEFAULT_CFG[key])
 
+
+def default_output_dir() -> str:
+    """
+    Return the current user's Desktop folder, portable across Windows/Linux/macOS.
+
+    - Windows: read the 'Desktop' entry of the per-user Shell Folders registry
+      key, so that OneDrive-redirected or localized desktops are honoured.
+    - Linux: read XDG_DESKTOP_DIR from user-dirs.dirs (e.g. ~/Scrivania on an
+      Italian locale).
+    - Fallback: ~/Desktop if it exists, otherwise the home directory.
+    """
+    home = os.path.expanduser("~")
+    desktop = None
+    try:
+        if sys.platform.startswith("win"):
+            import winreg
+            key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                desktop = os.path.expandvars(winreg.QueryValueEx(k, "Desktop")[0])
+        else:
+            cfg_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+            with open(os.path.join(cfg_home, "user-dirs.dirs"), encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("XDG_DESKTOP_DIR="):
+                        val = line.split("=", 1)[1].strip().strip('"')
+                        desktop = val.replace("$HOME", home)
+                        break
+    except Exception:
+        desktop = None      # registry key / user-dirs.dirs missing: use fallback
+    if desktop and os.path.isdir(desktop):
+        return os.path.normpath(desktop)
+    fallback = os.path.join(home, "Desktop")
+    return fallback if os.path.isdir(fallback) else home
+
 import logging
 
 log = logging.getLogger(__name__)
